@@ -14,7 +14,7 @@ verbose = True
 
 #capture delay variables in seconds
 fast_delay = 5
-normal_delay = 15
+normal_delay = 30
 
 #check if a database exists already, create a new one if not
 if os.path.exists('Captures_Dataframe.p'):
@@ -236,11 +236,12 @@ while True:
         #determine if a cat was detected with high probability
         cat_likely = False
         for key, val in detections.items():
-            if not ("Cat" in key and val > .7):
-                pass
-            else:
-                cat_likely =True
+            if "Cat" in key or "Dog" in key: # and val > .7:
+                cat_likely = True
                 break
+            else:
+                pass
+
                 
         #and change the response accordingly
         if cat_likely: 

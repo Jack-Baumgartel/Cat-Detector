@@ -1,7 +1,7 @@
 import pandas as pd
 import socket
 import time
-from PIL import Image
+from PIL import Image, ImageEnhance
 import pickle
 from time import strftime, localtime, time, sleep
 import numpy as np
@@ -81,9 +81,38 @@ def send_img(img_obj, name, instance, address, port, verbose = True):
         return None
 
 
+
+def adjust_img(img_obj):
+    '''Help: Given a PIL.Image object, correct it's average brightness level to a medium value if the image is too dark or light.
+    Returns a PIL.Image object.'''
+
+    #define average pixel brightness thresholds, above and below which the photo needs editing
+    brightness_low_th = 50
+    brightness_high_th = 200
+
+    #get the average brightness value of all pixels in the image
+    img_brightness = np.array(img_obj, dtype=int).flatten().mean()
+
+    #if the image is too dark, brighten it
+    if img_brightness < brightness_low_th:
+        correction_factor = float((brightness_low_th - img_brightness)/8+1)
+        enhanced_img = ImageEnhance.Brightness(img_obj).enhance(correction_factor)
+
+    #if the image is too bright, darken it
+    elif img_brightness > brightness_high_th:
+        correction_factor = float(1-(img_brightness - brightness_high_th)/50)
+        enhanced_img = ImageEnhance.Brightness(img_obj).enhance(correction_factor)
+
+    else:
+        enhanced_img = img_obj
+        
+    return enhanced_img
+
+
+
 #initialize the socket to send data
 c = socket.socket()
-address = 'Jacks-MacBook-Air.local'
+address = 'Jackmini.local'
 port = 8081
 c.connect((address, port))
 print(f'Initial socket connected at {address}:{port}')
@@ -128,7 +157,7 @@ if header_confirmation == 'Go':
 #set up the camera instance
 cam = picam.Picamera2()
 #set up a high-resolution configuration 
-high_res = cam.create_still_configuration({"size":(4608,2592)})
+high_res = cam.create_still_configuration({"size":(1777, 1000)})
 #configure the camera instance to use the high-res configuration and start the camera
 cam.configure(high_res)
 cam.start()
@@ -143,9 +172,10 @@ while run:
         img_start_time = time()
         img = cam.capture_image()
         img_name = f'{strftime("%b_%d_@_%-I_%M_%S_%p", localtime())}.jpg'
-        print(f"\nImage ({img_name}) captured, sending to main station ...")
-
-        response = send_img(img, img_name, current_instance, address, port)
+        enhanced_img = adjust_img(img)
+        
+        print(f"\nImage ({img_name}) captured & enhanced, sending to main station ...")
+        response = send_img(enhanced_img, img_name, current_instance, address, port)
         
         #set the run & delay variables as provided in the response
         run = response['run']
@@ -154,10 +184,11 @@ while run:
             print(f"Delay set to {delay}s.")
         print(f"Process completed in {np.round(time() - img_start_time, 1)}s\n")
 
+        #reset the start time counter
+        start_time = time()
 
-
-#program runs on boot due to a line in crontab, to edit, enter "crontab -e" into a terminal window and add the following
-#@reboot python /home/admin/Desktop/Cat_Detector_4/Main_RPI.py >> /home/admin/Desktop/Cat_Detector_4/Main_RPI.log 2>&1 
-
+'''Program runs on boot due to a line in crontab, to edit, enter "crontab -e" into a terminal window and add the following
+"@reboot python /home/admin/Desktop/Cat_Detector_4/Main_RPI.py >> /home/admin/Desktop/Cat_Detector_4/Main_RPI.log 2>&1"
+'''
 
 
