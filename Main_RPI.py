@@ -169,7 +169,9 @@ start_time = time()
 while run:
     #after the delay (s) has passed, capture a photo and send it to the base station
     if (time() - start_time) > delay:
-        img_start_time = time()
+        #reset the timer
+        start_time = time()
+        #capture the image, name it, and adjust the brightness if necessary
         img = cam.capture_image()
         img_name = f'{strftime("%b_%d_@_%-I_%M_%S_%p", localtime())}.jpg'
         enhanced_img = adjust_img(img)
@@ -182,10 +184,8 @@ while run:
         if response['delay']: 
             delay = response['delay']
             print(f"Delay set to {delay}s.")
-        print(f"Process completed in {np.round(time() - img_start_time, 1)}s\n")
+        print(f"Process completed in {np.round(time() - start_time, 1)}s\n")
 
-        #reset the start time counter
-        start_time = time()
 
 '''Program runs on boot due to a line in crontab, to edit, enter "crontab -e" into a terminal window and add the following
 "@reboot python /home/admin/Desktop/Cat_Detector_4/Main_RPI.py >> /home/admin/Desktop/Cat_Detector_4/Main_RPI.log 2>&1"
