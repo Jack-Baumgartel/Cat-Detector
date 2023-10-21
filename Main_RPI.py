@@ -1,194 +1,163 @@
+print('Loading dependencies ...')
+from time import strftime, localtime, time, sleep
 import pandas as pd
 import socket
-import time
 from PIL import Image, ImageEnhance
 import pickle
-from time import strftime, localtime, time, sleep
 import numpy as np
 import picamera2 as picam
+import os
+#from Comms import *
+from ImageHashing import *
+import signal
+import sys
+
+#simple function and listners to cleanly close the program on a kill command
+def close_program(*args):
+    print('\n\nProgram killed.\n\n')
+    sys.exit(0)
+signal.signal(signal.SIGINT, close_program)
+signal.signal(signal.SIGTERM, close_program)
+
+#note the new startup
+print(f'\n\n\n ---------------------------\n Program started: {strftime("%b_%d_%-I_%M_%S_%p", localtime())}.\n ---------------------------\n\n')
+
+#crontab scripts run weird, so add the path of any functions that are not available
+# you can find such paths using "command -v x" where x is the function or library
+#PATH=$PATH:/usr/sbin
 
 #add a delay to ensure the RPI is fully awake and connected
 sleep(30)
 
-#note for the log file the new startup
-print(f'\n\n\n ---------------------------\n Program started: {strftime("%b_%d_%-I_%M_%S_%p", localtime())}')
+#enable HDR on the camera
+os.popen("v4l2-ctl --set-ctrl wide_dynamic_range=1 -d /dev/v4l-subdev0")
 
-def send_img(img_obj, name, instance, address, port, verbose = True):
-    '''Help: Send an image to another computer via the provided socket connection. 
-    Provide:
-    img_obj: a PIL.Image instance
-    name: string, name of the image file EG. "Cat_01.jpg"
-    instance: int or string, the current system instance
-    socket_conn: socket.socket instance connected to a server
-    verbose: boolean, toggles print statements for debugging'''
+#set the machine source name
+mach_name = 'RPI 1'
+
+#set a capture delay
+delay = .5
+
+#determine where the program file is stored
+abs_path = '/home/admin/Desktop/Cat_Detect_8'
+#abs_path = os.getcwd()
+
+#create a new instance folder if necessary
+instances_folder = f"{abs_path}/Instances"
+if not os.path.exists(instances_folder): os.mkdir(instances_folder)
+
+#look for any prior instance folders that arent empty, and set the current instance to the next available integer
+prior_instances = [int(instance.name) for instance in os.scandir(instances_folder) if instance.is_dir() and os.listdir(instance.path)]
+current_instance = len(prior_instances)+1
+
+#create a new instance folder
+instance_folder = f"{instances_folder}/{current_instance}"
+if not os.path.exists(instance_folder):
+    os.mkdir(instance_folder)
+    #also make subfolders for image & video captures
+    #os.mkdir(f"{instance_folder}/Images")
+    #os.mkdir(f"{instance_folder}/Videos")
     
-    #connect to the socket
-    socket_conn = socket.socket()
-    socket_conn.connect((address, port))
-    timeout = 60
-    socket_conn.settimeout(timeout)
-    print(f'Socket connected at {address}:{port} with timeout of {timeout}s')
-    
-    
-    #prepare the data as a dictionary object, convert to bytes
-    img_dict = {'Type': 'Image',
-                 'Contents': {'Name': str(name),
-                              'Instance': int(instance),
-                              'Timestamp': strftime("%b_%d_%-I_%M_%S_%p", localtime()),
-                              'File': img_obj}}
-    img_bytes = pickle.dumps(img_dict)
-    
-    #then prepare the header message to be sent first and convert to bytes
-    header_msg = {'Type': 'Header',
-                 'Contents': {'Size': len(img_bytes)}}
-    header_bytes = pickle.dumps(header_msg)
-    
-    if verbose: print(f"Image bytes & header prepared")
-    
-    #send the header
-    socket_conn.send(header_bytes)
-    if verbose: print(f'Header sent.')
-        
-    #receive back confirmation before sending the full package
-    try:
-        header_confirmation = socket_conn.recv(4096).decode()
-        if verbose: print('Header confirmed.')
-    except socket.timeout:
-        print(f'ERROR: No confirmation received after {socket_conn.gettimeout()}s')
-    
-    #if the header was received properly, send the file package and wait for a response before closing the connection
-    if header_confirmation == 'Go':
-        if verbose: print(f'Sending image ...')
-        socket_conn.sendall(img_bytes)
-        if verbose: print(f'Done. Waiting {timeout}s for response.')
+print(f'New instance folder made @ {instance_folder}\n')
 
-        #await the response to the sent image
-        try:
-            response = pickle.loads(socket_conn.recv(4096))
-            print(f"Response received.")
-            return response
-        except socket.timeout:
-            print(f'ERROR: No confirmation received after {socket_conn.gettimeout()}s')
-            return None
-
-        socket_conn.close()
-        if verbose: print('Connection closed.')
-
-    else:
-        if verbose: print('Header not confirmed.')
-        socket_conn.close()
-        if verbose: print("Connection closed.")
-        return None
-
-
-
-def adjust_img(img_obj):
-    '''Help: Given a PIL.Image object, correct it's average brightness level to a medium value if the image is too dark or light.
-    Returns a PIL.Image object.'''
-
-    #define average pixel brightness thresholds, above and below which the photo needs editing
-    brightness_low_th = 50
-    brightness_high_th = 200
-
-    #get the average brightness value of all pixels in the image
-    img_brightness = np.array(img_obj, dtype=int).flatten().mean()
-
-    #if the image is too dark, brighten it
-    if img_brightness < brightness_low_th:
-        correction_factor = float((brightness_low_th - img_brightness)/8+1)
-        enhanced_img = ImageEnhance.Brightness(img_obj).enhance(correction_factor)
-
-    #if the image is too bright, darken it
-    elif img_brightness > brightness_high_th:
-        correction_factor = float(1-(img_brightness - brightness_high_th)/50)
-        enhanced_img = ImageEnhance.Brightness(img_obj).enhance(correction_factor)
-
-    else:
-        enhanced_img = img_obj
-        
-    return enhanced_img
-
-
-
-#initialize the socket to send data
-c = socket.socket()
-address = 'Jackmini.local'
-port = 8081
-c.connect((address, port))
-print(f'Initial socket connected at {address}:{port}')
-#set a maximum waiting time until an error is reported
-c.settimeout(15)
-
-
-#prepare an intial request to get a new instance variable
-new_instance_req = {'Type':'Request',
-                    'Contents':'New Instance'}
-new_instance_req_bytes = pickle.dumps(new_instance_req)
-
-#prepare the header message and convert to bytes
-header_msg = {'Type': 'Header',
-             'Contents': {'Size': len(new_instance_req_bytes)}}
-header_bytes = pickle.dumps(header_msg)
-
-
-#send the new instance request header and wait for confirmation
-c.send(header_bytes)
-print('Instance request header sent.')
-try:
-    header_confirmation = c.recv(4096).decode()
-    print('Header confirmation received.')
-except socket.timeout:
-    print(f'ERROR: No confirmation received after {c.gettimeout()}s')
-
-
-#if the header was received properly, send the file package and wait for the response
-if header_confirmation == 'Go':
-    print(f'Header confirmation is: "{header_confirmation}", sending package')
-    c.send(new_instance_req_bytes)
-    print('Instance request package sent.')
-    try:
-        current_instance = c.recv(4096).decode()
-        print(f'Response received, new instance set to {current_instance}\n')
-    except socket.timeout:
-        print(f'ERROR: No confirmation received after {c.gettimeout()}s')
-    #c.close()
-    #print('Closed connection')
-
-#set up the camera instance
+#initiate the camera instance
 cam = picam.Picamera2()
-#set up a high-resolution configuration 
-high_res = cam.create_still_configuration({"size":(1777, 1000)})
-#configure the camera instance to use the high-res configuration and start the camera
+#set up a high-resolution configuration for stills
+high_res = cam.create_still_configuration({"size":(1920, 1080)})
+#max size is (4608, 2592), conservative size is 1777, 1000
+#also create a video configuration
+vid_conf = cam.create_video_configuration({"size":(1920, 1080)}, controls={"AnalogueGain":12})
+
+#configure the camera instance to use the video configuration
 cam.configure(high_res)
 cam.start()
+#allow the camera to wake up for a second
+sleep(1)
 
-#run the main program to continually capture and send photos
-run = True #variable to neatly close the program
-delay = 1 #variable to control the minimum time between image captures
+#now run the program continuously
 start_time = time()
-while run:
-    #after the delay (s) has passed, capture a photo and send it to the base station
-    if (time() - start_time) > delay:
-        #reset the timer
-        start_time = time()
-        #capture the image, name it, and adjust the brightness if necessary
-        img = cam.capture_image()
-        img_name = f'{strftime("%b_%d_@_%-I_%M_%S_%p", localtime())}.jpg'
-        enhanced_img = adjust_img(img)
+mode = 'Image'
+prior_hash = np.array([])
+prior_img = None
+prior_name = None
+while True:
+    #if delay seconds have not yet passed, do nothing
+    if (time() - start_time) < delay:
+        pass
+    #otherwise capture an image anc compare it to the last one in memory
+    #reset the timer
+    start_time = time()
+    #capture the image, name it, and adjust the brightness if necessary
+    img = cam.capture_image()
+    #name it with a timestamp
+    img_name = f'{strftime("%b_%d_@_%-I_%M_%S_%p", localtime())}.jpg'
+    print(f'Capturing image {img_name} ... ', end='')
+    #edit the image brightness if necessary
+    enhanced_img = adjust_img(img, verbose=False)
+    
+    #hash the current image object
+    img_hash = phash(enhanced_img)
+    
+    #if there is nothing to compare the current hash to, pass
+    if len(prior_hash) == 0:
+        prior_img = enhanced_img
+        prior_name = img_name
+        prior_hash = img_hash
+        print("done. No prior image for comparison.")
+        pass
+    else:
+        #if a prior hash is in memory, compare it to the current image hash for similarity
+        difference_array = np.equal(prior_hash, img_hash)
+        percent_alike = np.round(sum(difference_array)/len(difference_array)*100, 2)
+        print(f"{percent_alike}% unchanged.")
         
-        print(f"\nImage ({img_name}) captured & enhanced, sending to main station ...")
-        response = send_img(enhanced_img, img_name, current_instance, address, port)
-        
-        #set the run & delay variables as provided in the response
-        run = response['run']
-        if response['delay']: 
-            delay = response['delay']
-            print(f"Delay set to {delay}s.")
-        print(f"Process completed in {np.round(time() - start_time, 1)}s\n")
+        #if significant change is present, save the current & prior images and switch to video mode
+        if percent_alike < 90:
+            #save the prior and current image to files
+            prior_img.save(f'{instance_folder}/{prior_name}')
+            enhanced_img.save(f'{instance_folder}/{img_name}')
+            mode = 'Video'
+            
+            #record a video!!
+            vid_name = f'{strftime("%b_%d_@_%-I_%M_%S_%p", localtime())}.mp4'
+            print('\nVideo capture initiated ... ', end='')
+            vid_save_location = f'{instance_folder}/{vid_name}'
+            utc_timestamp = time()
+            cam.switch_mode(vid_conf)
+            cam.start()
+            cam.start_and_record_video(vid_save_location, duration=70)
+            print(f'and saved as {vid_save_location}\n')
+            
+            #set the mode back to images and reset the hash to check for movement again
+            cam.switch_mode(high_res)
+            prior_hash = np.array([])
+            
+        #otherwise store the current image in memory for next iteration
+        else:
+            #store the current image in memory for potential later use
+            prior_img = enhanced_img
+            prior_name = img_name
+            prior_hash = img_hash
 
 
 '''Program runs on boot due to a line in crontab, to edit, enter "crontab -e" into a terminal window and add the following
-"@reboot python /home/admin/Desktop/Cat_Detector_4/Main_RPI.py >> /home/admin/Desktop/Cat_Detector_4/Main_RPI.log 2>&1"
+"@reboot LIBCAMERA_LOG_LEVELS=WARN python /home/admin/Desktop/Cat_Detect_8/Main_RPI.py >> /home/admin/Desktop/Cat_Detect_8/Main_RPI.log 2>&1"
+
+* "LIBCAMERA_LOG_LEVELS=WARN" prefix suppresses informational libcamera console output. Exclude that text to get full info from the camera object
+
+
+To find and stop the program when it's running from boot, use "ps -ef | grep python" to list running python scripts, then get the PID of the most likely script, and run "kill <PID>" where <PID> is likely 253 or another integer.
 '''
+
+
+
+
+
+
+
+
+
+
+
 
 
